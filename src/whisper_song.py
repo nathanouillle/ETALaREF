@@ -1,9 +1,11 @@
 
 import os
 import argparse
-import whisper
+from typing import Optional
 
-def transcribe_folder(folder: str, model_size: str = "base", language: str = None, out_dir='./transcriptions'):
+def transcribe_folder(folder: str, model_size: str = "base", language: Optional[str] = None, out_dir: str = './transcriptions'):
+    # Lazy import so modules that depend on this file don't require whisper at import time
+    import whisper
     model = whisper.load_model(model_size)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -35,4 +37,4 @@ if __name__ == "__main__":
     parser.add_argument("--out_dir", default="./transcriptions", help="Directory to save transcriptions")
     args = parser.parse_args()
 
-    transcribe_folder(args.folder, args.model, args.language)
+    transcribe_folder(args.folder, args.model, args.language, args.out_dir)
