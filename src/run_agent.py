@@ -4,10 +4,6 @@ import json
 import os
 import sys
 from typing import Any, Dict
-
-# Import the tool function (decorated with @tool if smolagents is available)
-#from src.lyrics_tool import search_song_by_lyrics
-
 import re
 import time
 from dataclasses import dataclass
@@ -43,7 +39,7 @@ def fetch_url(url: str, timeout: int = 15) -> Optional[str]:
 
 
 LYRICS_HOST_PATTERNS = [
-    # Common lyrics sites (no scraping of TOS-restricted behind auth/paywalls)
+    # Common lyrics sites
     r"genius\.com",
     r"azlyrics\.com",
     r"lyrics\.com",
