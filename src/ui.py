@@ -22,6 +22,7 @@ def chatbot_ui(
       - Best run in CLASSIC Jupyter Notebook (not VS Code / not JupyterLab) so the JS->Python bridge works.
       - Open via http://localhost:PORT (Chrome) and File -> Trust Notebook so mic prompts appear.
       - If the JS->Python bridge isn't available, this falls back to downloading the WAV; you can then Upload it.
+      - For MP3/WEBM uploads or recordings, Whisper relies on ffmpeg. Ensure ffmpeg is available in PATH.
     """
     # === Widgets ===
     chat_output = widgets.Output(
@@ -51,14 +52,29 @@ def chatbot_ui(
                 is_user = (m["sender"] == "user")
                 bg = "#DCF8C6" if is_user else "#E8E8E8"
                 align = "flex-end" if is_user else "flex-start"
-                html.append(f"<div style='align-self:{align}; background:{bg}; padding:8px 10px; border-radius:10px; max-width:72%; word-wrap:break-word;'>")
+                html.append(
+                    f"<div style='align-self:{align}; background:{bg}; padding:8px 10px; "
+                    f"border-radius:10px; max-width:72%; word-wrap:break-word;'>"
+                )
                 if m.get("text"):
                     html.append(f"<div style='white-space:pre-wrap'>{m['text']}</div>")
                 if m.get("audio_path"):
                     try:
                         with open(m["audio_path"], "rb") as f:
                             b64 = base64.b64encode(f.read()).decode("ascii")
-                        html.append(f"<audio controls style='width:100%; margin-top:6px' src='data:audio/wav;base64,{b64}'></audio>")
+                        # Guess MIME by extension (fallback to wav)
+                        ext = os.path.splitext(m["audio_path"])[1].lower()
+                        mime = "audio/wav"
+                        if ext in (".mp3",):
+                            mime = "audio/mpeg"
+                        elif ext in (".webm",):
+                            mime = "audio/webm"
+                        elif ext in (".ogg",):
+                            mime = "audio/ogg"
+                        html.append(
+                            f"<audio controls style='width:100%; margin-top:6px' "
+                            f"src='data:{mime};base64,{b64}'></audio>"
+                        )
                     except Exception as e:
                         html.append(f"<div style='color:#b00'>[Audio load failed: {e}]</div>")
                 html.append("</div>")
@@ -202,12 +218,12 @@ def chatbot_ui(
       writeString(view, 12, 'fmt ');
       view.setUint32(16, 16, true);
       view.setUint16(20, 1, true); // PCM
+      writeString(view, 36, 'data');
       view.setUint16(22, 1, true); // mono
       view.setUint32(24, sampleRate, true);
       view.setUint32(28, sampleRate * 2, true); // byte rate
       view.setUint16(32, 2, true); // block align
       view.setUint16(34, 16, true); // bits per sample
-      writeString(view, 36, 'data');
       view.setUint32(40, pcm.length * 2, true);
       new Int16Array(buffer, 44, pcm.length).set(pcm);
       return buffer;
@@ -246,6 +262,19 @@ def chatbot_ui(
 """
         display(Javascript(js))
 
+    # === Helpers ===
+    def _extract_upload_items(value):
+        """
+        Normalize ipywidgets FileUpload.value to a list of dicts.
+        - ipywidgets <=7: value is a dict {filename: {...}}
+        - ipywidgets 8+: value is a tuple of dicts
+        """
+        if isinstance(value, dict):
+            return list(value.values())
+        if isinstance(value, (tuple, list)):
+            return list(value)
+        return []
+
     # === Events ===
     def on_click_send(_):
         send_message(user_input.value)
@@ -257,18 +286,41 @@ def chatbot_ui(
         start_record_js(record_seconds)
 
     def on_upload_change(_):
-        if not upload.value:
+        items = _extract_upload_items(upload.value)
+        if not items:
             return
-        up = next(iter(upload.value.values()))
-        raw = up["content"]
-        fname = f"upload_{int(time.time())}_{ui_id}.wav"
+
+        # take the latest file (in case widget still had previous content)
+        up = items[-1]
+        raw = up.get("content", b"")
+        if isinstance(raw, memoryview):
+            raw = raw.tobytes()
+
+        original_name = up.get("name", f"upload_{int(time.time())}.wav")
+        ext = os.path.splitext(original_name)[1] or ".wav"
+        fname = f"upload_{int(time.time())}_{ui_id}{ext}"
         path = os.path.join(voices_dir, fname)
-        with open(path, "wb") as f:
-            f.write(raw)
+
+        try:
+            with open(path, "wb") as f:
+                f.write(raw)
+        except Exception as e:
+            chat_history.append({"sender": "bot", "text": f"[Failed to save upload: {e}]", "audio_path": None})
+            render_chat()
+            return
+
         transcript = transcribe_if_possible(path)
-        text = transcript if transcript else "[Voice message]"
+        text = transcript if transcript else f"[Uploaded {original_name}]"
         send_message(text, audio_path=path)
-        upload.value.clear()
+
+        # clear widget value for both APIs
+        try:
+            upload.value = ()
+        except Exception:
+            try:
+                upload.value.clear()
+            except Exception:
+                pass
 
     send_button.on_click(on_click_send)
     user_input.on_submit(on_submit_text)
